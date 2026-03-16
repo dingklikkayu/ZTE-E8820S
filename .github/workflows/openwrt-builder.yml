@@ -67,24 +67,34 @@ jobs:
       - name: Download official pre-built toolchain
         run: |
           BASE_URL="https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
-          TOOLCHAIN_ARCHIVE="openwrt-toolchain-${{ env.OPENWRT_VERSION }}-${{ env.TARGET }}-${{ env.SUBTARGET }}_gcc-*.Linux-x86_64.tar.zst"
 
-          # Fetch the index to resolve the exact versioned filename
+          # Resolve exact filename from sha256sums (strips leading * from each entry)
           wget -q "$BASE_URL/sha256sums" -O sha256sums
-          TOOLCHAIN_FILE=$(grep "openwrt-toolchain" sha256sums | awk '{print $2}' | sed 's/\*//')
+          TOOLCHAIN_FILE=$(grep "openwrt-toolchain" sha256sums \
+            | awk '{print $2}' \
+            | sed 's|^\*||')
 
-          echo "Toolchain archive: $TOOLCHAIN_FILE"
-          wget -q --show-progress "$BASE_URL/$TOOLCHAIN_FILE" -O toolchain.tar.zst
+          if [ -z "$TOOLCHAIN_FILE" ]; then
+            echo "ERROR: Could not find toolchain entry in sha256sums"
+            cat sha256sums
+            exit 1
+          fi
 
-          # Verify checksum
-          grep "$TOOLCHAIN_FILE" sha256sums | sha256sum -c -
+          echo "Resolved toolchain archive: $TOOLCHAIN_FILE"
 
-          # Extract
-          tar -I zstd -xf toolchain.tar.zst
-          TOOLCHAIN_DIR=$(ls -d openwrt-toolchain-*/)
+          # Download using the exact resolved filename
+          wget -q --show-progress "$BASE_URL/$TOOLCHAIN_FILE" -O "$TOOLCHAIN_FILE"
+
+          # Verify checksum — build a clean `hash  filename` line for sha256sum -c
+          EXPECTED_HASH=$(grep "openwrt-toolchain" sha256sums | awk '{print $1}')
+          echo "$EXPECTED_HASH  $TOOLCHAIN_FILE" | sha256sum -c -
+
+          # Extract and record directory
+          tar -I zstd -xf "$TOOLCHAIN_FILE"
+          TOOLCHAIN_DIR=$(ls -d openwrt-toolchain-*/ | head -1)
           echo "TOOLCHAIN_DIR=$(realpath $TOOLCHAIN_DIR)" >> $GITHUB_ENV
-          echo "Toolchain extracted to: $TOOLCHAIN_DIR"
-          ls "$TOOLCHAIN_DIR"
+          echo "Toolchain extracted to: $(realpath $TOOLCHAIN_DIR)"
+          ls "$(realpath $TOOLCHAIN_DIR)"
 
       # ── Clone OpenWrt source ────────────────────────────────────────────
       - name: Clone OpenWrt ${{ env.OPENWRT_VERSION }} source
