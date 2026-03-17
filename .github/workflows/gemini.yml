@@ -38,13 +38,15 @@ jobs:
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
 
-    - name: Clone Source & OpenWrt
+- name: Clone Source & OpenWrt
       run: |
-        # Clone repo modifikasi (ZTE-E8820S) untuk mengambil folder patch
-        git clone --depth 1 $REPO_URL -b $REPO_BRANCH ZTE-E8820S
+        # Clone repo modifikasi tanpa memaksakan branch 'master'
+        # Ini akan otomatis mengambil default branch (baik itu 'main' atau 'master')
+        git clone --depth 1 $REPO_URL ZTE-E8820S
         
         # Clone OpenWrt dengan branch spesifik v25.12.0
         git clone --depth 1 https://github.com/openwrt/openwrt.git -b $OWRT_BRANCH openwrt
+
 
     - name: Cache OpenWrt dl
       uses: actions/cache@v4
