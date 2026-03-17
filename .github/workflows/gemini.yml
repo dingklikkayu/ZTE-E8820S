@@ -1,4 +1,4 @@
-name: Build OpenWrt for ZTE E8820S (v25.12.0 - Auto Release)
+name: Build OpenWrt for ZTE E8820S (v25.12.0 - Numbered Steps)
 
 on:
   workflow_dispatch:
@@ -11,46 +11,52 @@ env:
   OWRT_BRANCH: v25.12.0
   TOOLCHAIN_URL: https://downloads.openwrt.org/releases/25.12.0/targets/ramips/mt7621/openwrt-toolchain-25.12.0-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst
   TZ: Asia/Jakarta
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Dibutuhkan untuk membuat release
+      contents: write
 
     steps:
-    - name: Checkout
+    - name: 01. Checkout Repository
       uses: actions/checkout@v4
 
-    - name: Cleanup & Initialization
+    - name: 02. Cleanup & Initialization Environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup /usr/lib/jvm
         docker rmi $(docker images -q) || true
+        
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install -y \
           build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-          gettext git libncurses5-dev libssl-dev rsync \
+          gettext git libncurses5-dev libssl-dev rsync ccache \
           unzip zlib1g-dev file python3 python3-setuptools python3-dev zstd
+          
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
 
-    - name: Clone Source & OpenWrt
+    - name: 03. Clone Custom Source & OpenWrt Core
       run: |
         git clone --depth 1 $REPO_URL ZTE-E8820S
         git clone --depth 1 https://github.com/openwrt/openwrt.git -b $OWRT_BRANCH openwrt
 
-    - name: Cache OpenWrt dl
+    - name: 04. Setup Cache (DL & ccache)
       uses: actions/cache@v4
       with:
-        path: openwrt/dl
-        key: ${{ runner.os }}-openwrt-dl-${{ hashFiles('openwrt/include/scan.mk') }}
+        path: |
+          openwrt/dl
+          ${{ env.CCACHE_DIR }}
+        key: ${{ runner.os }}-openwrt-v25.12-${{ hashFiles('openwrt/include/scan.mk') }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-openwrt-dl-
+          ${{ runner.os }}-openwrt-v25.12-${{ hashFiles('openwrt/include/scan.mk') }}-
+          ${{ runner.os }}-openwrt-v25.12-
 
-    - name: Load external toolchain
+    - name: 05. Load External Toolchain
       run: |
         cd openwrt
         mkdir -p staging_dir
@@ -58,41 +64,43 @@ jobs:
         TOOLCHAIN_PATH=$(find staging_dir -maxdepth 3 -type d -name "toolchain-*" | head -n 1)
         echo "TOOLCHAIN_ROOT_PATH=$GITHUB_WORKSPACE/openwrt/$TOOLCHAIN_PATH" >> $GITHUB_ENV
 
-    - name: Update & Install feeds
+    - name: 06. Update & Install Feeds
       run: |
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Apply Custom Patches
+    - name: 07. Apply Custom Patches (DTS, LED, Image Config)
       run: |
-        # 1. DTS File
+        # DTS File
         cp ZTE-E8820S/patch/mt7621_zte_e8820s.dts openwrt/target/linux/ramips/dts/
-        # 2. LED Patch
+        
+        # LED Patch
         sed -i -e '/^esac/i \\' -e '/^esac/r ZTE-E8820S/patch/leds.txt' openwrt/target/linux/ramips/mt7621/base-files/etc/board.d/01_leds
-        # 3. Image Config
+        
+        # Image Config
         cat ZTE-E8820S/patch/zte.txt >> openwrt/target/linux/ramips/image/mt7621.mk
-        # 4. Default Settings
+        
+        # Default Settings
         mkdir -p openwrt/package/base-files/files/etc/uci-defaults
         cp ZTE-E8820S/patch/99-default-settings openwrt/package/base-files/files/etc/uci-defaults/
         chmod +x openwrt/package/base-files/files/etc/uci-defaults/*
 
-    - name: Configuration
+    - name: 08. Configuration (Load Buildinfo & Inject Settings)
       run: |
         cd openwrt
-        
-        # 1. Download config buildinfo resmi dari OpenWrt 25.12.0
         curl -sL https://downloads.openwrt.org/releases/25.12.0/targets/ramips/mt7621/config.buildinfo > .config
         
-        # 2. Hapus flag multi-device/all-profile agar fokus ke satu device
-        # Menghapus CONFIG_TARGET_MULTI_PROFILE, CONFIG_TARGET_PER_DEVICE_ROOTFS, dll.
+        # Cleanup multi-device flags
         sed -i '/CONFIG_TARGET_ramips_mt7621_DEVICE_/d' .config
         sed -i '/CONFIG_TARGET_MULTI_PROFILE/d' .config
         sed -i '/CONFIG_TARGET_ALL_PROFILES/d' .config
         sed -i '/CONFIG_TARGET_DEVICE_PACKAGES_ramips_mt7621/d' .config
         
-        # 3. Tambahkan entry spesifik ZTE E8820S dan External Toolchain
+        # Inject ccache, External Toolchain, and Device Entry
         {
+          echo "CONFIG_CCACHE=y"
+          echo "CONFIG_CCACHE_DIR=\"$CCACHE_DIR\""
           echo "CONFIG_TARGET_ramips=y"
           echo "CONFIG_TARGET_ramips_mt7621=y"
           echo "CONFIG_TARGET_ramips_mt7621_DEVICE_zte_e8820s=y"
@@ -100,42 +108,38 @@ jobs:
           echo "CONFIG_TOOLCHAIN_ROOT=\"$TOOLCHAIN_ROOT_PATH\""
         } >> .config
         
-        # 4. Generate konfigurasi final dan bersihkan dependensi
         make defconfig
 
-    - name: Download package
+    - name: 09. Download Package Source
       run: |
         cd openwrt
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Compile the firmware
+    - name: 10. Compile Firmware
       run: |
         cd openwrt
+        echo "Building with $(nproc) threads"
         make -j$(nproc) || make -j1 V=s
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: Organize files for Release
+    - name: 11. Organize Artifacts
       run: |
         mkdir -p release_files
-        # Mengambil file factory dan sysupgrade saja
         cp openwrt/bin/targets/ramips/mt7621/*.bin release_files/ || true
-        # Menambahkan manifest paket sebagai referensi
         cp openwrt/bin/targets/ramips/mt7621/*.manifest release_files/ || true
-        # Berikan nama yang unik agar tidak tertukar
         cd release_files
         for file in *; do mv "$file" "${{ env.FILE_DATE }}-$file"; done
 
-    - name: Upload to GitHub Release
+    - name: 12. Upload to GitHub Release
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ZTE-E8820S-${{ env.FILE_DATE }}
         files: release_files/*
         body: |
-          Firmware OpenWrt ZTE E8820S
-          - Build Version: ${{ env.OWRT_BRANCH }}
+          Build OpenWrt ZTE E8820S v25.12.0
           - Date: ${{ env.FILE_DATE }}
-          - Toolchain: GCC 14.3.0 / Musl
+          - Status: Automated Build Successful
         draft: false
         prerelease: false
       env:
