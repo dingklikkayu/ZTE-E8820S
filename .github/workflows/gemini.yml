@@ -80,11 +80,27 @@ jobs:
     - name: Configuration
       run: |
         cd openwrt
-        echo "CONFIG_TARGET_ramips=y" > .config
-        echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
-        echo "CONFIG_TARGET_ramips_mt7621_DEVICE_zte_e8820s=y" >> .config
-        echo "CONFIG_EXTERNAL_TOOLCHAIN=y" >> .config
-        echo "CONFIG_TOOLCHAIN_ROOT=\"$TOOLCHAIN_ROOT_PATH\"" >> .config
+        
+        # 1. Download config buildinfo resmi dari OpenWrt 25.12.0
+        curl -sL https://downloads.openwrt.org/releases/25.12.0/targets/ramips/mt7621/config.buildinfo > .config
+        
+        # 2. Hapus flag multi-device/all-profile agar fokus ke satu device
+        # Menghapus CONFIG_TARGET_MULTI_PROFILE, CONFIG_TARGET_PER_DEVICE_ROOTFS, dll.
+        sed -i '/CONFIG_TARGET_ramips_mt7621_DEVICE_/d' .config
+        sed -i '/CONFIG_TARGET_MULTI_PROFILE/d' .config
+        sed -i '/CONFIG_TARGET_ALL_PROFILES/d' .config
+        sed -i '/CONFIG_TARGET_DEVICE_PACKAGES_ramips_mt7621/d' .config
+        
+        # 3. Tambahkan entry spesifik ZTE E8820S dan External Toolchain
+        {
+          echo "CONFIG_TARGET_ramips=y"
+          echo "CONFIG_TARGET_ramips_mt7621=y"
+          echo "CONFIG_TARGET_ramips_mt7621_DEVICE_zte_e8820s=y"
+          echo "CONFIG_EXTERNAL_TOOLCHAIN=y"
+          echo "CONFIG_TOOLCHAIN_ROOT=\"$TOOLCHAIN_ROOT_PATH\""
+        } >> .config
+        
+        # 4. Generate konfigurasi final dan bersihkan dependensi
         make defconfig
 
     - name: Download package
