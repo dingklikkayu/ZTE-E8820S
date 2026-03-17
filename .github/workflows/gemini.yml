@@ -1,4 +1,4 @@
-name: Build OpenWrt for ZTE E8820S (Patched)
+name: Build OpenWrt for ZTE E8820S (v25.12.0)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,8 @@ on:
 env:
   REPO_URL: https://github.com/dingklikkayu/ZTE-E8820S
   REPO_BRANCH: master
-  # Menggunakan toolchain mt7621 sesuai target patch Anda
+  OWRT_BRANCH: v25.12.0
+  # Toolchain eksternal untuk mempercepat build
   TOOLCHAIN_URL: https://downloads.openwrt.org/releases/25.12.0/targets/ramips/mt7621/openwrt-toolchain-25.12.0-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst
   TZ: Asia/Jakarta
 
@@ -38,11 +39,11 @@ jobs:
 
     - name: Clone Source & OpenWrt
       run: |
-        # Clone repo modifikasi Anda (berisi folder patch)
+        # Clone repo modifikasi (ZTE-E8820S) untuk mengambil folder patch
         git clone --depth 1 $REPO_URL -b $REPO_BRANCH ZTE-E8820S
         
-        # Clone base OpenWrt (menggunakan branch openwrt-23.05 atau master sesuai kebutuhan toolchain)
-        git clone --depth 1 https://github.com/openwrt/openwrt.git openwrt
+        # Clone OpenWrt dengan branch spesifik v25.12.0
+        git clone --depth 1 https://github.com/openwrt/openwrt.git -b $OWRT_BRANCH openwrt
 
     - name: Cache OpenWrt dl
       uses: actions/cache@v4
@@ -57,6 +58,7 @@ jobs:
         cd openwrt
         mkdir -p staging_dir
         curl -L $TOOLCHAIN_URL | tar -I zstd -x -C staging_dir
+        # Mencari folder toolchain secara otomatis
         TOOLCHAIN_PATH=$(find staging_dir -maxdepth 3 -type d -name "toolchain-*" | head -n 1)
         echo "TOOLCHAIN_ROOT_PATH=$GITHUB_WORKSPACE/openwrt/$TOOLCHAIN_PATH" >> $GITHUB_ENV
 
@@ -68,30 +70,27 @@ jobs:
 
     - name: Apply Custom Patches
       run: |
-        # Menggunakan file dari folder ZTE-E8820S/patch ke folder openwrt/
-        
-        # 1. DTS File
+        # DTS File
         cp ZTE-E8820S/patch/mt7621_zte_e8820s.dts openwrt/target/linux/ramips/dts/
         
-        # 2. LED
+        # LED Patch
         sed -i -e '/^esac/i \\' -e '/^esac/r ZTE-E8820S/patch/leds.txt' openwrt/target/linux/ramips/mt7621/base-files/etc/board.d/01_leds
         
-        # 3. Make configuration
+        # Image Config
         cat ZTE-E8820S/patch/zte.txt >> openwrt/target/linux/ramips/image/mt7621.mk
         
-        # 4. Default setting for wifi ssid & password
+        # Default Settings (WiFi, dll)
         mkdir -p openwrt/package/base-files/files/etc/uci-defaults
         cp ZTE-E8820S/patch/99-default-settings openwrt/package/base-files/files/etc/uci-defaults/
 
     - name: Configuration
       run: |
         cd openwrt
-        # Konfigurasi target spesifik
         echo "CONFIG_TARGET_ramips=y" > .config
         echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
         echo "CONFIG_TARGET_ramips_mt7621_DEVICE_zte_e8820s=y" >> .config
         
-        # Paksa penggunaan toolchain eksternal
+        # Integrasi Toolchain Eksternal
         echo "CONFIG_EXTERNAL_TOOLCHAIN=y" >> .config
         echo "CONFIG_TOOLCHAIN_ROOT=\"$TOOLCHAIN_ROOT_PATH\"" >> .config
         
@@ -106,11 +105,11 @@ jobs:
     - name: Compile the firmware
       run: |
         cd openwrt
-        # Build tanpa membangun toolchain (sangat cepat)
+        # Menggunakan toolchain yang sudah ada (langsung compile target)
         make -j$(nproc) || make -j1 V=s
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: OpenWrt_ZTE_E8820S_Final
+        name: OpenWrt_ZTE_E8820S_v25.12.0
         path: openwrt/bin/targets/ramips/mt7621/
